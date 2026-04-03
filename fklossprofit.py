@@ -13,12 +13,14 @@ with st.sidebar:
     std_base = st.number_input("Standard Pant Cost (PT/PL)", value=165)
     hf_base = st.number_input("HF Series Cost", value=110)
     st.divider()
+    st.info("💡 Tip: Ye cost category-wise total profit nikalne mein use hoti hai.")
 
 # --- FILE UPLOADER ---
 uploaded_file = st.file_uploader("Upload Excel (.xlsx)", type=["xlsx"])
 
 if uploaded_file:
     try:
+        # Excel read karna aur Orders P&L sheet dhoondna
         excel_data = pd.ExcelFile(uploaded_file)
         target_sheet = next((s for s in excel_data.sheet_names if "Orders P&L" in s), excel_data.sheet_names[0])
         df = pd.read_excel(uploaded_file, sheet_name=target_sheet)
@@ -32,18 +34,19 @@ if uploaded_file:
         units_col = "Net Units"
         settlement_col = "Bank Settlement [Projected] (INR)"
         status_col = "Order Status"
-        gross_units_col = "Gross Units"
         
+        # Gross Units detect karna (Return rate ke liye)
+        gross_col_list = [c for c in df.columns if 'Gross Units' in c]
+        gross_units_col = gross_col_list[0] if gross_col_list else "Gross Units"
+
         if sku_col in df.columns and settlement_col in df.columns:
             # Data Cleaning
             df[units_col] = pd.to_numeric(df[units_col], errors='coerce').fillna(0).astype(int)
             df[settlement_col] = pd.to_numeric(df[settlement_col], errors='coerce').fillna(0)
-            
-            # Gross Units detection
-            g_cols = [c for c in df.columns if 'Gross Units' in c]
-            df[gross_units_col] = pd.to_numeric(df[g_cols[0]], errors='coerce').fillna(0).astype(int) if g_cols else df[units_col]
+            if gross_units_col in df.columns:
+                df[gross_units_col] = pd.to_numeric(df[gross_units_col], errors='coerce').fillna(0).astype(int)
 
-            # Categorization Logic
+            # --- CATEGORIZATION LOGIC ---
             def get_cat_data(sku_name):
                 sku = str(sku_name).upper()
                 is_hf = sku.startswith("HF")
@@ -56,7 +59,7 @@ if uploaded_file:
             df['Category'] = [x[0] for x in results]
             df['Unit_Cost'] = [x[1] for x in results]
             
-            # Profit Calculation
+            # Profit Calculation: Settlement - (Net Units * Cost)
             df['Net_Profit'] = df.apply(
                 lambda x: x[settlement_col] - (x[units_col] * x['Unit_Cost']) if x[units_col] > 0 else x[settlement_col], 
                 axis=1
@@ -65,9 +68,10 @@ if uploaded_file:
             # --- 1. TOP LEVEL KPI METRICS ---
             t_pay = int(df[settlement_col].sum())
             t_prof = int(df['Net_Profit'].sum())
-            t_gross = int(df[gross_units_col].sum())
             t_net_units = int(df[units_col].sum())
             
+            # Return Rate Calculation
+            t_gross = int(df[gross_units_col].sum()) if gross_units_col in df.columns else t_net_units
             return_rate = ((t_gross - t_net_units) / t_gross * 100) if t_gross > 0 else 0
             margin_pct = (t_prof / t_pay * 100) if t_pay > 0 else 0
             
@@ -79,40 +83,33 @@ if uploaded_file:
 
             st.divider()
 
-            # --- 2. CATEGORY TOTAL PROFIT/LOSS SECTION ---
-            st.subheader("💰 Category-wise Total Profit & Loss")
+            # --- 2. CATEGORY-WISE TOTAL PROFIT & LOSS ---
+            st.subheader("💰 Category-wise Performance (Total & Average)")
             
             # Category summary calculate karna
-            cat_pnl = df.groupby('Category').agg({
+            cat_summary = df.groupby('Category').agg({
                 units_col: 'sum',
                 settlement_col: 'sum',
                 'Net_Profit': 'sum'
-            }).rename(columns={units_col: 'Net Units', settlement_col: 'Total Settlement', 'Net_Profit': 'Total Profit/Loss'})
+            }).rename(columns={
+                units_col: 'Net Units', 
+                settlement_col: 'Total Settlement', 
+                'Net_Profit': 'Total P&L'
+            })
 
-            # Averages calculate karna (bina return ke)
+            # Sales Only Averages (Bina return ke)
             sales_only = df[df[units_col] > 0].groupby('Category').agg({units_col: 'sum', settlement_col: 'sum', 'Net_Profit': 'sum'})
-            cat_pnl['Avg Sales Prof.'] = (sales_only['Net_Profit'] / sales_only[units_col]).round(0)
-            cat_pnl['Net Avg Prof.'] = (cat_pnl['Total Profit/Loss'] / cat_pnl['Net Units']).round(0)
+            cat_summary['Avg Sales Prof.'] = (sales_only['Net_Profit'] / sales_only[units_col]).round(0)
+            cat_summary['Net Avg Prof.'] = (cat_summary['Total P&L'] / cat_summary['Net Units']).round(0)
 
-            # Styling for Profit/Loss Column
+            # Styling function for Red/Green colors
             def color_pnl(val):
                 color = '#ef5350' if val < 0 else '#66bb6a'
                 return f'color: {color}; font-weight: bold'
 
+            # Displaying the table with .map() fix for newer Pandas
             st.dataframe(
-                cat_pnl.fillna(0).astype(int).style.applymap(color_pnl, subset=['Total Profit/Loss']),
+                cat_summary.fillna(0).astype(int).style.map(color_pnl, subset=['Total P&L']),
                 use_container_width=True
             )
-
-            # --- 3. ALL ORDERS BREAKDOWN ---
-            st.subheader("🔎 All Orders Breakdown (Use Filters Here)")
-            final_disp = df[[order_id_col, sku_col, 'Category', status_col, units_col, settlement_col, 'Net_Profit']].copy()
-            final_disp[settlement_col] = final_disp[settlement_col].round(0).astype(int)
-            final_disp['Net_Profit'] = final_disp['Net_Profit'].round(0).astype(int)
-            
-            st.dataframe(final_disp.sort_index(ascending=False), use_container_width=True, hide_index=True)
-
-    except Exception as e:
-        st.error(f"Error: {e}")
-else:
-    st.info("Aavoni: Please upload the Orders P&L file.")
+            st.info("💡
