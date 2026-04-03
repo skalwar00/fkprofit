@@ -2,18 +2,18 @@ import streamlit as st
 import pandas as pd
 
 # --- CONFIG ---
-st.set_page_config(page_title="Aavoni Orders P&L Analyzer", layout="wide", page_icon="📦")
+st.set_page_config(page_title="Aavoni Advanced P&L Dashboard", layout="wide", page_icon="📊")
 
-st.title("📦 Aavoni Order-level P&L Analyzer")
-st.markdown("Flipkart **Orders P&L** Analysis (Sales Avg vs Net Avg with Returns).")
+st.title("📊 Aavoni Pro Business Dashboard")
+st.markdown("Flipkart **Orders P&L** - Advanced Metrics & Returns Analysis.")
 
 # --- SIDEBAR: COST SETTINGS ---
 with st.sidebar:
-    st.header("📊 Cost Settings")
+    st.header("📊 Product Costing")
     std_base = st.number_input("Standard Pant Cost (PT/PL)", value=165)
     hf_base = st.number_input("HF Series Cost", value=110)
     st.divider()
-    st.info(f"Cost Logic:\n- HF: {hf_base} (S) / {hf_base*2} (CBO)\n- Std: {std_base} (S) / {std_base*2} (CBO) / {std_base*3} (3CBO)")
+    st.info("💡 Tip: Ye cost calculation Returns ke impact ko samajhne mein madad karegi.")
 
 # --- FILE UPLOADER ---
 uploaded_file = st.file_uploader("Upload Excel (.xlsx)", type=["xlsx"])
@@ -24,20 +24,24 @@ if uploaded_file:
         target_sheet = next((s for s in excel_data.sheet_names if "Orders P&L" in s), excel_data.sheet_names[0])
         df = pd.read_excel(uploaded_file, sheet_name=target_sheet)
         
+        # Cleanup column names
         df.columns = [str(c).strip() for c in df.columns]
         
+        # Column Mappings
         sku_col = "SKU Name"
         units_col = "Net Units"
         settlement_col = "Bank Settlement [Projected] (INR)"
         status_col = "Order Status"
-
+        gross_units_col = "Gross Units"
+        
         if sku_col in df.columns and settlement_col in df.columns:
-            # Data Cleaning (Removing Decimals)
+            # Data Cleaning
             df[units_col] = pd.to_numeric(df[units_col], errors='coerce').fillna(0).astype(int)
+            df[gross_units_col] = pd.to_numeric(df[df.columns[df.columns.str.contains('Gross Units')][0]], errors='coerce').fillna(0).astype(int)
             df[settlement_col] = pd.to_numeric(df[settlement_col], errors='coerce').fillna(0)
 
-            # --- CATEGORIZATION ---
-            def get_cat_and_cost(sku_name):
+            # Categorization
+            def get_cat_data(sku_name):
                 sku = str(sku_name).upper()
                 is_hf = sku.startswith("HF")
                 if "3CBO" in sku: return "Std 3CBO", (std_base * 3)
@@ -45,9 +49,9 @@ if uploaded_file:
                     return ("HF Combo", hf_base * 2) if is_hf else ("Std Combo", std_base * 2)
                 return ("HF Single", hf_base) if is_hf else ("Std Single", std_base)
 
-            cat_results = df[sku_col].apply(get_cat_and_cost)
-            df['Category'] = [x[0] for x in cat_results]
-            df['Unit_Cost'] = [x[1] for x in cat_results]
+            results = df[sku_col].apply(get_cat_data)
+            df['Category'] = [x[0] for x in results]
+            df['Unit_Cost'] = [x[1] for x in results]
             
             # Profit Calculation
             df['Net_Profit'] = df.apply(
@@ -55,66 +59,70 @@ if uploaded_file:
                 axis=1
             )
 
-            # --- 1. SUMMARY METRICS ---
+            # --- 1. TOP LEVEL KPI METRICS ---
             t_pay = int(df[settlement_col].sum())
             t_prof = int(df['Net_Profit'].sum())
-            t_units = int(df[units_col].sum())
+            t_gross = int(df[gross_units_col].sum())
+            t_net_units = int(df[units_col].sum())
             
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total Net Settlement", f"₹{t_pay:,}")
-            c2.metric("Total Net Profit", f"₹{t_prof:,}")
-            c3.metric("Total Net Units", f"{t_units:,}")
+            # Calculations for Metrics
+            return_rate = ((t_gross - t_net_units) / t_gross * 100) if t_gross > 0 else 0
+            margin_pct = (t_prof / t_pay * 100) if t_pay > 0 else 0
+            
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Settlement", f"₹{t_pay:,}")
+            m2.metric("Net Profit", f"₹{t_prof:,}", delta=f"{margin_pct:.1f}% Margin")
+            m3.metric("Return Rate", f"{return_rate:.1f}%", delta_color="inverse", delta=f"{t_gross - t_net_units} Units")
+            m4.metric("Net Units", f"{t_net_units:,}")
 
-            # --- 2. CATEGORY-WISE TABLE (Dono Averages ke saath) ---
-            st.subheader("📊 Category Summary: Sales vs Net Analysis")
-            
-            # Grouping 1: Sirf Sales (Units > 0) - Pehle wala logic
-            sales_only = df[df[units_col] > 0].groupby('Category').agg({
-                units_col: 'sum',
-                settlement_col: 'sum',
-                'Net_Profit': 'sum'
-            })
-            
-            # Grouping 2: Total Category (Sales + Returns) - Naya logic
-            total_cat = df.groupby('Category').agg({
-                units_col: 'sum',
-                settlement_col: 'sum',
-                'Net_Profit': 'sum'
-            })
+            st.divider()
 
-            # Calculation Table
-            summary_table = pd.DataFrame(index=total_cat.index)
-            summary_table['Net Units'] = total_cat[units_col]
+            # --- 2. ADVANCED ANALYSIS (RTO vs RVP if available) ---
+            c1, c2 = st.columns(2)
             
-            # A. Pehle wala Avg (Sales Only)
-            summary_table['Avg Sales Sett.'] = (sales_only[settlement_col] / sales_only[units_col]).round(0)
-            summary_table['Avg Sales Prof.'] = (sales_only['Net_Profit'] / sales_only[units_col]).round(0)
+            with c1:
+                st.subheader("📦 Order Status Distribution")
+                if status_col in df.columns:
+                    status_counts = df[status_col].value_counts()
+                    st.bar_chart(status_counts)
+                else:
+                    st.info("Order Status column not found for chart.")
+
+            with c2:
+                st.subheader("💰 Category Performance")
+                cat_data = df.groupby('Category').agg({
+                    units_col: 'sum',
+                    settlement_col: 'sum',
+                    'Net_Profit': 'sum'
+                })
+                # Old Avg (Sales) vs Net Avg (Returns included)
+                sales_only = df[df[units_col] > 0].groupby('Category').agg({units_col:'sum', settlement_col:'sum', 'Net_Profit':'sum'})
+                
+                cat_data['Avg Sales Prof'] = (sales_only['Net_Profit'] / sales_only[units_col]).round(0)
+                cat_data['Net Avg Prof'] = (cat_data['Net_Profit'] / cat_data[units_col]).round(0)
+                
+                st.dataframe(cat_data[['Net Avg Prof', 'Avg Sales Prof']].astype(int), use_container_width=True)
+
+            # --- 3. SKU HEALTH CHECK ---
+            st.subheader("⚠️ Loss-Making Orders")
+            loss_orders = df[df['Net_Profit'] < 0]
+            if not loss_orders.empty:
+                st.warning(f"Aapke {len(loss_orders)} orders loss mein hain! Check details below.")
+                st.dataframe(loss_orders[[sku_col, status_col, settlement_col, 'Net_Profit']].head(10), use_container_width=True)
+            else:
+                st.success("Badhiya! Koi bhi order loss mein nahi hai.")
+
+            # --- 4. DETAILED TABLE ---
+            st.subheader("🔎 Detailed Breakdown")
+            final_df = df[[sku_col, 'Category', status_col, units_col, settlement_col, 'Net_Profit']].copy()
+            final_df = final_df.astype({settlement_col: int, 'Net_Profit': int})
             
-            # B. Naya Avg (Net with Returns)
-            summary_table['Net Avg Sett.'] = (total_cat[settlement_col] / total_cat[units_col]).round(0)
-            summary_table['Net Avg Prof.'] = (total_cat['Net_Profit'] / total_cat[units_col]).round(0)
+            st.dataframe(
+                final_df.sort_values('Net_Profit'),
+                use_container_width=True, hide_index=True
+            )
 
-            # Clean display
-            st.table(summary_table.fillna(0).astype(int))
-            
-            st.info("""
-            **Column Guide:**
-            - **Avg Sales Sett./Prof:** Ye tab ka hai jab order deliver hota hai (Bina return ke nuksan ke).
-            - **Net Avg Sett./Prof:** Isme returns ke negative charges kaatne ke baad jo asli bacha, wo hai.
-            """)
-
-            # --- 3. DETAILED DATA ---
-            st.subheader("🔎 Detailed Order List")
-            display_df = df[[sku_col, 'Category', units_col, settlement_col, 'Net_Profit']].copy()
-            if status_col in df.columns:
-                display_df.insert(2, status_col, df[status_col])
-
-            display_df[settlement_col] = display_df[settlement_col].round(0).astype(int)
-            display_df['Net_Profit'] = display_df['Net_Profit'].round(0).astype(int)
-
-            st.dataframe(display_df.sort_index(ascending=False), use_container_width=True, hide_index=True)
-            
     except Exception as e:
         st.error(f"Error: {e}")
 else:
-    st.info("Aavoni: Please upload the Orders P&L Excel file.")
+    st.info("Aavoni: Please upload the Excel file to see advanced analytics.")
