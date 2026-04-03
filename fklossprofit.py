@@ -5,7 +5,7 @@ import pandas as pd
 st.set_page_config(page_title="Aavoni Business Dashboard", layout="wide", page_icon="📊")
 
 st.title("📊 Aavoni Pro Business Dashboard")
-st.markdown("Flipkart **Orders P&L** - Loss Tracking with Order IDs.")
+st.markdown("Flipkart **Orders P&L** - Category Profit & Loss Analysis.")
 
 # --- SIDEBAR: COST SETTINGS ---
 with st.sidebar:
@@ -43,7 +43,7 @@ if uploaded_file:
             g_cols = [c for c in df.columns if 'Gross Units' in c]
             df[gross_units_col] = pd.to_numeric(df[g_cols[0]], errors='coerce').fillna(0).astype(int) if g_cols else df[units_col]
 
-            # Categorization
+            # Categorization Logic
             def get_cat_data(sku_name):
                 sku = str(sku_name).upper()
                 is_hf = sku.startswith("HF")
@@ -73,47 +73,39 @@ if uploaded_file:
             
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Total Settlement", f"₹{t_pay:,}")
-            m2.metric("Net Profit", f"₹{t_prof:,}", delta=f"{margin_pct:.1f}% Margin")
+            m2.metric("Total Net Profit", f"₹{t_prof:,}", delta=f"{margin_pct:.1f}% Margin")
             m3.metric("Return Rate", f"{return_rate:.1f}%", delta_color="inverse", delta=f"{t_gross - t_net_units} Units Return")
             m4.metric("Net Units Sold", f"{t_net_units:,}")
 
             st.divider()
 
-            # --- 2. CATEGORY PERFORMANCE TABLE ---
-            st.subheader("💰 Category Performance: Sales vs Net Analysis")
-            total_cat = df.groupby('Category').agg({units_col: 'sum', settlement_col: 'sum', 'Net_Profit': 'sum'})
+            # --- 2. CATEGORY TOTAL PROFIT/LOSS SECTION ---
+            st.subheader("💰 Category-wise Total Profit & Loss")
+            
+            # Category summary calculate karna
+            cat_pnl = df.groupby('Category').agg({
+                units_col: 'sum',
+                settlement_col: 'sum',
+                'Net_Profit': 'sum'
+            }).rename(columns={units_col: 'Net Units', settlement_col: 'Total Settlement', 'Net_Profit': 'Total Profit/Loss'})
+
+            # Averages calculate karna (bina return ke)
             sales_only = df[df[units_col] > 0].groupby('Category').agg({units_col: 'sum', settlement_col: 'sum', 'Net_Profit': 'sum'})
+            cat_pnl['Avg Sales Prof.'] = (sales_only['Net_Profit'] / sales_only[units_col]).round(0)
+            cat_pnl['Net Avg Prof.'] = (cat_pnl['Total Profit/Loss'] / cat_pnl['Net Units']).round(0)
 
-            summary_table = pd.DataFrame(index=total_cat.index)
-            summary_table['Net Units'] = total_cat[units_col]
-            summary_table['Avg Sales Sett.'] = (sales_only[settlement_col] / sales_only[units_col]).round(0)
-            summary_table['Avg Sales Prof.'] = (sales_only['Net_Profit'] / sales_only[units_col]).round(0)
-            summary_table['Net Avg Sett.'] = (total_cat[settlement_col] / total_cat[units_col]).round(0)
-            summary_table['Net Avg Prof.'] = (total_cat['Net_Profit'] / total_cat[units_col]).round(0)
+            # Styling for Profit/Loss Column
+            def color_pnl(val):
+                color = '#ef5350' if val < 0 else '#66bb6a'
+                return f'color: {color}; font-weight: bold'
 
-            st.table(summary_table.fillna(0).astype(int))
+            st.dataframe(
+                cat_pnl.fillna(0).astype(int).style.applymap(color_pnl, subset=['Total Profit/Loss']),
+                use_container_width=True
+            )
 
-            # --- 3. LOSS-MAKING SKU CHECK (With Order ID) ---
-            st.subheader("⚠️ Loss-making Orders (Details with Order ID)")
-            # Selecting relevant columns including Order ID
-            loss_cols = [order_id_col, sku_col, status_col, settlement_col, 'Net_Profit']
-            # Only use columns that actually exist in the dataframe
-            available_cols = [c for c in loss_cols if c in df.columns or c == 'Net_Profit']
-            
-            loss_df = df[df['Net_Profit'] < 0][available_cols].copy()
-            
-            if not loss_df.empty:
-                # Formatting decimals to integers for clean look
-                if settlement_col in loss_df.columns:
-                    loss_df[settlement_col] = loss_df[settlement_col].round(0).astype(int)
-                loss_df['Net_Profit'] = loss_df['Net_Profit'].round(0).astype(int)
-                
-                st.dataframe(loss_df.sort_values('Net_Profit'), use_container_width=True, hide_index=True)
-            else:
-                st.success("Great! Koi bhi order negative profit mein nahi hai.")
-
-            # --- 4. FULL ORDER LIST ---
-            st.subheader("🔎 All Orders Breakdown")
+            # --- 3. ALL ORDERS BREAKDOWN ---
+            st.subheader("🔎 All Orders Breakdown (Use Filters Here)")
             final_disp = df[[order_id_col, sku_col, 'Category', status_col, units_col, settlement_col, 'Net_Profit']].copy()
             final_disp[settlement_col] = final_disp[settlement_col].round(0).astype(int)
             final_disp['Net_Profit'] = final_disp['Net_Profit'].round(0).astype(int)
