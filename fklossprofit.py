@@ -102,14 +102,30 @@ if uploaded_file:
             cat_summary['Avg Sales Prof.'] = (sales_only['Net_Profit'] / sales_only[units_col]).round(0)
             cat_summary['Net Avg Prof.'] = (cat_summary['Total P&L'] / cat_summary['Net Units']).round(0)
 
-            # Styling function for Red/Green colors
+            # Styling function
             def color_pnl(val):
                 color = '#ef5350' if val < 0 else '#66bb6a'
                 return f'color: {color}; font-weight: bold'
 
-            # Displaying the table with .map() fix for newer Pandas
+            # Table display
             st.dataframe(
                 cat_summary.fillna(0).astype(int).style.map(color_pnl, subset=['Total P&L']),
                 use_container_width=True
             )
-            st.info("💡
+            # YAHAN THI ERROR (Fixed):
+            st.info("💡 **Total P&L** mein returns ke charges already minus ho chuke hain.")
+
+            # --- 3. ALL ORDERS BREAKDOWN ---
+            st.subheader("🔎 All Orders Breakdown (Use Filters Here)")
+            final_cols = [c for c in [order_id_col, sku_col, 'Category', status_col, units_col, settlement_col, 'Net_Profit'] if c in df.columns or c in ['Category', 'Net_Profit']]
+            
+            final_disp = df[final_cols].copy()
+            final_disp[settlement_col] = final_disp[settlement_col].round(0).astype(int)
+            final_disp['Net_Profit'] = final_disp['Net_Profit'].round(0).astype(int)
+            
+            st.dataframe(final_disp.sort_index(ascending=False), use_container_width=True, hide_index=True)
+
+    except Exception as e:
+        st.error(f"Technical Error: {e}")
+else:
+    st.info("Aavoni: Please upload the Flipkart 'Orders P&L' Excel file to start.")
