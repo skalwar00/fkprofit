@@ -5,7 +5,7 @@ import pandas as pd
 st.set_page_config(page_title="Aavoni Orders P&L Analyzer", layout="wide", page_icon="📦")
 
 st.title("📦 Aavoni Order-level P&L Analyzer")
-st.markdown("Flipkart **Orders P&L** (Ab Returns ke charges ke saath Net Average calculation).")
+st.markdown("Flipkart **Orders P&L** Analysis (Sales Avg vs Net Avg with Returns).")
 
 # --- SIDEBAR: COST SETTINGS ---
 with st.sidebar:
@@ -49,9 +49,7 @@ if uploaded_file:
             df['Category'] = [x[0] for x in cat_results]
             df['Unit_Cost'] = [x[1] for x in cat_results]
             
-            # Profit Calculation: 
-            # If Sales (Units>0): Settlement - Cost
-            # If Return (Units=0): Settlement (which is negative return charge)
+            # Profit Calculation
             df['Net_Profit'] = df.apply(
                 lambda x: x[settlement_col] - (x[units_col] * x['Unit_Cost']) if x[units_col] > 0 else x[settlement_col], 
                 axis=1
@@ -67,46 +65,54 @@ if uploaded_file:
             c2.metric("Total Net Profit", f"₹{t_prof:,}")
             c3.metric("Total Net Units", f"{t_units:,}")
 
-            # --- 2. CATEGORY-WISE TABLE (With Return Logic) ---
-            st.subheader("📊 Category Summary (Including Return Charges)")
+            # --- 2. CATEGORY-WISE TABLE (Dono Averages ke saath) ---
+            st.subheader("📊 Category Summary: Sales vs Net Analysis")
             
-            # Grouping the WHOLE dataframe to include return rows (where Units=0)
-            cat_group = df.groupby('Category').agg({
+            # Grouping 1: Sirf Sales (Units > 0) - Pehle wala logic
+            sales_only = df[df[units_col] > 0].groupby('Category').agg({
                 units_col: 'sum',
                 settlement_col: 'sum',
                 'Net_Profit': 'sum'
-            }).rename(columns={units_col: 'Net Units'})
-
-            # A. Avg Settlement (Sirf Sales waala - Bina Return ke)
-            sales_only = df[df[units_col] > 0].groupby('Category')[settlement_col].mean()
+            })
             
-            # B. Net Avg Settlement (Asli Average: Total Payout / Total Units)
-            # Isme return charges minus hone ke baad ka per-unit average dikhega
-            cat_group['Net Avg Settlement'] = (cat_group[settlement_col] / cat_group['Net Units']).round(0)
-            
-            # C. Net Avg Profit
-            cat_group['Net Avg Profit'] = (cat_group['Net_Profit'] / cat_group['Net Units']).round(0)
+            # Grouping 2: Total Category (Sales + Returns) - Naya logic
+            total_cat = df.groupby('Category').agg({
+                units_col: 'sum',
+                settlement_col: 'sum',
+                'Net_Profit': 'sum'
+            })
 
-            # Formatting table for display
-            display_table = cat_group[['Net Units', 'Net Avg Settlement', 'Net Avg Profit']].fillna(0).astype(int)
+            # Calculation Table
+            summary_table = pd.DataFrame(index=total_cat.index)
+            summary_table['Net Units'] = total_cat[units_col]
             
-            st.table(display_table)
-            st.info("💡 **Net Avg Settlement** = (Total Payout including Return Charges) ÷ (Net Units). Ye aapka asli per-unit recovery hai.")
+            # A. Pehle wala Avg (Sales Only)
+            summary_table['Avg Sales Sett.'] = (sales_only[settlement_col] / sales_only[units_col]).round(0)
+            summary_table['Avg Sales Prof.'] = (sales_only['Net_Profit'] / sales_only[units_col]).round(0)
+            
+            # B. Naya Avg (Net with Returns)
+            summary_table['Net Avg Sett.'] = (total_cat[settlement_col] / total_cat[units_col]).round(0)
+            summary_table['Net Avg Prof.'] = (total_cat['Net_Profit'] / total_cat[units_col]).round(0)
 
-            # --- 3. FULL ORDER BREAKDOWN ---
+            # Clean display
+            st.table(summary_table.fillna(0).astype(int))
+            
+            st.info("""
+            **Column Guide:**
+            - **Avg Sales Sett./Prof:** Ye tab ka hai jab order deliver hota hai (Bina return ke nuksan ke).
+            - **Net Avg Sett./Prof:** Isme returns ke negative charges kaatne ke baad jo asli bacha, wo hai.
+            """)
+
+            # --- 3. DETAILED DATA ---
             st.subheader("🔎 Detailed Order List")
             display_df = df[[sku_col, 'Category', units_col, settlement_col, 'Net_Profit']].copy()
             if status_col in df.columns:
                 display_df.insert(2, status_col, df[status_col])
 
-            # Final integer conversion for display
             display_df[settlement_col] = display_df[settlement_col].round(0).astype(int)
             display_df['Net_Profit'] = display_df['Net_Profit'].round(0).astype(int)
 
-            st.dataframe(
-                display_df.sort_index(ascending=False),
-                use_container_width=True, hide_index=True
-            )
+            st.dataframe(display_df.sort_index(ascending=False), use_container_width=True, hide_index=True)
             
     except Exception as e:
         st.error(f"Error: {e}")
